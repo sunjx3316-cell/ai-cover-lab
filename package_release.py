@@ -12,7 +12,7 @@ FILES = ['app.py', 'lab_env.py', 'audio_workflow.py', 'worker.py', 'process_runn
          'MODEL_CARD.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'RELEASE_NOTES.md',
          'build_offline.py', 'install-offline.ps1', 'Install-Offline.cmd', 'fetch_release_dependencies.py',
          'verify_offline.py', 'test_offline_packaging.py', 'package_local.py', 'LOCAL_USE.md',
-         'test_local_package.py']
+         'test_local_package.py', 'LOCAL_USE.txt']
 
 
 def build():

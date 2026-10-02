@@ -1,0 +1,24 @@
+AI Cover Lab 本地使用说明
+
+直接使用：
+1. 双击桌面的“启动 AI翻唱”。这是程序启动入口，不是说明文件。
+2. 等待浏览器自动打开，选择“声线库”和“凑企鹅 · 25轮”。
+3. 上传歌曲，点击“开始制作”。模型已经训练好，不需要再次训练。
+4. 首次先试听默认 30 秒片段。确认后，把“制作时长”设为 0 制作整首。
+5. 完成后点击“保存音频到本机”，文件在安装目录的 exports 文件夹。
+
+程序目录：
+D:\coding项目\AI翻唱\AI-Cover-Lab-Release\portable-test\AI-Cover-Lab
+桌面快捷方式使用该目录，请勿移动或删除它。
+
+使用完整压缩包：
+桌面 AI-Cover-Lab-local-offline.zip 是本机个人离线备份。
+先右键压缩包并“全部解压”，再双击解压目录中的 Start-Cover.cmd。
+必须完整解压，不能在压缩包里面直接启动，也不能只解压一个 CMD。
+解压后约占 10 GB，需要兼容的 NVIDIA 驱动，不用另装 Python 或 CUDA Toolkit。
+ZIP 文件名后的 .partial 表示仍在打包，不是可使用的成品。
+
+GitHub 公开版本：
+https://github.com/sunjx3316-cell/ai-cover-lab/releases
+当前源码已公开，完整公开 Release 仍在准备。发布后会另行通知下载步骤。
+本机的个人 ZIP 未完成再分发审查，请勿直接公开上传。

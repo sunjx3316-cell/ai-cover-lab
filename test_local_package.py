@@ -33,6 +33,7 @@ class LocalPackage(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 self.assertFalse(json.loads(archive.read('AI-Cover-Lab/BUILD.json'))['redistribution_ready'])
                 self.assertIn('AI-Cover-Lab/LOCAL_USE.md', archive.namelist())
+                self.assertIn('AI-Cover-Lab/LOCAL_USE.txt', archive.namelist())
             self.assertTrue(target.with_suffix('.zip.sha256').read_text().startswith(hashlib.sha256(target.read_bytes()).hexdigest()))
 
     def test_changed_file_is_rejected(self):
@@ -49,6 +50,17 @@ class LocalPackage(unittest.TestCase):
             payload = self.fixture(root, {'runtime/private.wav': b'private'})
             with self.assertRaisesRegex(ValueError, 'Audio recordings'):
                 package(payload, root / 'local.zip')
+
+    def test_same_size_changed_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = self.fixture(root)
+            path = payload / 'Start-Cover.cmd'
+            path.write_bytes(b'X' * path.stat().st_size)
+            target = root / 'local.zip'
+            with self.assertRaisesRegex(ValueError, 'File changed'):
+                package(payload, target)
+            self.assertFalse(target.exists())
 
     def test_unexpected_training_files_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

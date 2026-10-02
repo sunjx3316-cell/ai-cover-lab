@@ -31,20 +31,29 @@ def package(root, target):
             raise ValueError('Unexpected training data in manifest')
         if not path.is_file() or path.stat().st_size != item['bytes']:
             raise ValueError(f'File changed after validation: {name}')
-        files.append((path, relative.as_posix(), item['bytes']))
-    total = sum(item[2] for item in files)
+        files.append((path, relative.as_posix(), item))
+    total = sum(item[2]['bytes'] for item in files)
     done = 0
     last = time.monotonic()
     print(f'Packing {len(files)} files, {total / 1024**3:.2f} GiB', flush=True)
     with zipfile.ZipFile(temporary, 'x', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
-        for path, name, size in files:
-            archive.write(path, 'AI-Cover-Lab/' + name)
+        for path, name, item in files:
+            hasher = hashlib.sha256()
+            size = 0
+            with path.open('rb') as source, archive.open('AI-Cover-Lab/' + name, 'w', force_zip64=True) as output:
+                for block in iter(lambda: source.read(4 * 1024 * 1024), b''):
+                    hasher.update(block)
+                    size += len(block)
+                    output.write(block)
+            if size != item['bytes'] or hasher.hexdigest() != item['sha256']:
+                raise ValueError(f'File changed after validation: {name}')
             done += size
             if time.monotonic() - last > 15:
                 print(f'Packed {done / total:.0%}: {name}', flush=True)
                 last = time.monotonic()
         archive.write(root / 'MANIFEST.json', 'AI-Cover-Lab/MANIFEST.json')
         archive.write(Path(__file__).with_name('LOCAL_USE.md'), 'AI-Cover-Lab/LOCAL_USE.md')
+        archive.write(Path(__file__).with_name('LOCAL_USE.txt'), 'AI-Cover-Lab/LOCAL_USE.txt')
     print('Verifying ZIP CRC...', flush=True)
     with zipfile.ZipFile(temporary) as archive:
         bad = archive.testzip()
