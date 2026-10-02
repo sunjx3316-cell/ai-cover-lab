@@ -13,6 +13,7 @@ def run(command, cwd):
     print(result.stdout, flush=True)
     if result.returncode:
         raise RuntimeError(result.stderr[-5000:])
+    return result.stdout
 
 
 if __name__ == '__main__':
@@ -45,9 +46,18 @@ if __name__ == '__main__':
              'x=sum(np.sin(2*np.pi*220*k*t)/k for k in range(1,9))*0.1; '
              f'sf.write({str(fixture)!r},x,44100)'], root)
         profile = root / 'training/3cccd738abed'
-        run([str(python), str(root / 'rvc_worker.py'), 'convert', '--input', str(fixture),
+        conversion = run([str(python), str(root / 'rvc_worker.py'), 'convert', '--input', str(fixture),
              '--output', str(output), '--model', str(profile / 'saved/voice-25.pth'),
              '--index', str(profile / 'saved/voice.index')], root)
+        index_loaded = False
+        for line in conversion.splitlines():
+            try:
+                report = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(report, dict) and report.get('voice_index') == 'loaded':
+                index_loaded = True
+        assert index_loaded, 'Voice index was not used in GPU conversion'
         run([str(python), '-c',
              f'import soundfile as sf,numpy as np; x,sr=sf.read({str(output)!r}); '
              'assert sr==44100 and len(x)>sr*3 and np.isfinite(x).all(); '

@@ -62,6 +62,15 @@ class LocalPackage(unittest.TestCase):
                 package(payload, target)
             self.assertFalse(target.exists())
 
+    def test_existing_guides_are_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = self.fixture(root, {'LOCAL_USE.md': b'guide', 'LOCAL_USE.txt': b'plain guide'})
+            target = root / 'local.zip'
+            package(payload, target)
+            with zipfile.ZipFile(target) as archive:
+                self.assertEqual(len(archive.namelist()), len(set(archive.namelist())))
+
     def test_unexpected_training_files_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

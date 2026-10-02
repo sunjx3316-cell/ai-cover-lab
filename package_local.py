@@ -52,8 +52,9 @@ def package(root, target):
                 print(f'Packed {done / total:.0%}: {name}', flush=True)
                 last = time.monotonic()
         archive.write(root / 'MANIFEST.json', 'AI-Cover-Lab/MANIFEST.json')
-        archive.write(Path(__file__).with_name('LOCAL_USE.md'), 'AI-Cover-Lab/LOCAL_USE.md')
-        archive.write(Path(__file__).with_name('LOCAL_USE.txt'), 'AI-Cover-Lab/LOCAL_USE.txt')
+        for guide in ('LOCAL_USE.md', 'LOCAL_USE.txt'):
+            if guide not in manifest:
+                archive.write(Path(__file__).with_name(guide), 'AI-Cover-Lab/' + guide)
     print('Verifying ZIP CRC...', flush=True)
     with zipfile.ZipFile(temporary) as archive:
         bad = archive.testzip()
