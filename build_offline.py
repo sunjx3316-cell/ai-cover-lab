@@ -68,7 +68,18 @@ def write_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-def assemble(installation, output, git, ffmpeg, sources):
+def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=False):
+    if not local_only:
+        provenance = json.loads((sources / 'SOURCE-MANIFEST.json').read_text(encoding='utf-8'))
+        if provenance.get('ffmpeg', {}).get('status') != 'complete':
+            raise RuntimeError('FFmpeg corresponding-source audit is incomplete')
+        for component in ['ffmpeg', 'pedalboard']:
+            entry = provenance[component]
+            if digest(sources / entry['archive']) != entry['sha256']:
+                raise RuntimeError(f'{component} source archive checksum mismatch')
+        license_text = subprocess.check_output([str(ffmpeg / 'bin/ffmpeg.exe'), '-L'], text=True, stderr=subprocess.STDOUT)
+        if 'GNU Lesser General Public License' not in license_text:
+            raise RuntimeError('Expected an LGPL FFmpeg build')
     payload = output / 'AI-Cover-Lab'
     if payload.exists():
         raise FileExistsError('Use a fresh output folder; existing installs are never overwritten.')
@@ -106,18 +117,26 @@ def assemble(installation, output, git, ffmpeg, sources):
     saved = installation / 'training' / VOICE / 'saved/epoch-25'
     for original, name in [('voice-25.pth', 'voice-25.pth'), ('voice.index', 'voice.index')]:
         copy(saved / original, payload / 'training' / VOICE / 'saved' / name, True)
-    if digest(payload / 'training' / VOICE / 'saved/voice-25.pth') != '91bc98037f32c3eeca82dcbf4fb494a616a76fa99d43a3dc4c9a2ed97f5614a1b':
+    if digest(payload / 'training' / VOICE / 'saved/voice-25.pth') != '91bc98037f32c3eca82dcbf4fb494a616a76fa99d43a3dc4c9a2ed97f5614a1b':
         raise RuntimeError('Bundled voice checksum mismatch')
     write_json(payload / 'training' / VOICE / 'profile.json', {
         'id': VOICE, 'name': '凑企鹅', 'files': [], 'candidates': [], 'last_epoch': 25,
+        'inference_only': True,
         'status': '已保存推理模型（未完整验收）',
         'active': {'id': 'bundled-25', 'epoch': 25, 'model': 'saved/voice-25.pth',
                    'index': 'saved/voice.index', 'approved': False,
                    'validation_bypassed': True, 'saved_by_user': True}})
     # Use a separately audited LGPL shared build, not imageio's GPL static exe.
-    tree(ffmpeg / 'bin', payload / 'runtime')
-    tree(ffmpeg, payload / 'LICENSES/FFmpeg-distribution')
-    tree(sources, payload / 'LICENSES/corresponding-source')
+    if local_only:
+        copy(installation / 'runtime/ffmpeg.exe', payload / 'runtime/ffmpeg.exe', True)
+    else:
+        tree(ffmpeg / 'bin', payload / 'runtime')
+        for item in ffmpeg.iterdir():
+            if item.name != 'bin' and item.is_dir():
+                tree(item, payload / 'LICENSES/FFmpeg-distribution' / item.name)
+            elif item.is_file():
+                copy(item, payload / 'LICENSES/FFmpeg-distribution' / item.name)
+        tree(sources, payload / 'LICENSES/corresponding-source')
     write_json(payload / 'DEPENDENCIES.json', sorted([
         {'name': dist.metadata.get('Name'), 'version': dist.version,
          'license': dist.metadata.get('License-Expression') or dist.metadata.get('License', '')[:200],
@@ -125,7 +144,8 @@ def assemble(installation, output, git, ffmpeg, sources):
         for dist in importlib.metadata.distributions(path=[str(site)])], key=lambda item: (item['name'] or '').lower()))
     write_json(payload / 'BUILD.json', {'version': VERSION, 'upstream_revisions': REVISIONS,
                                       'platform': 'Windows-x86_64', 'torch': '2.4.0+cu124',
-                                      'voice_epoch': 25, 'includes_raw_audio': False})
+                                      'voice_epoch': 25, 'includes_raw_audio': False,
+                                      'redistribution_ready': not local_only})
     files = list(payload.rglob('*'))
     media = [str(file.relative_to(payload)) for file in files if file.is_file() and file.suffix.lower() in AUDIO]
     if media:
@@ -138,26 +158,43 @@ def assemble(installation, output, git, ffmpeg, sources):
 
 
 def archive(payload, destination, part_mib=900):
+    build = json.loads((payload / 'BUILD.json').read_text(encoding='utf-8'))
+    if not build.get('redistribution_ready'):
+        raise RuntimeError('Local test bundle: redistribution dependencies have not been cleared.')
     target = destination / 'AI-Cover-Lab-Windows-offline.zip'
     if target.exists():
         raise FileExistsError(target)
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as package:
         for file in sorted(payload.rglob('*')):
-            if file.is_file() and not any(part in {'__pycache__', 'temp', 'logs', 'outputs', 'exports', 'cache'}
-                                          for part in file.relative_to(payload).parts[:1]):
-                package.write(file, 'AI-Cover-Lab/' + file.relative_to(payload).as_posix())
+            relative = file.relative_to(payload)
+            if not file.is_file() or '__pycache__' in relative.parts or file.suffix in {'.pyc', '.pyo'}:
+                continue
+            if relative.parts[0] in {'temp', 'logs', 'outputs', 'exports', 'cache'}:
+                continue
+            allowed_training = {f'training/{VOICE}/profile.json', f'training/{VOICE}/saved/voice-25.pth',
+                                f'training/{VOICE}/saved/voice.index'}
+            if relative.parts[0] == 'voices' or (relative.parts[0] == 'training' and relative.as_posix() not in allowed_training):
+                raise RuntimeError(f'Unexpected private data in release: {relative}')
+            package.write(file, 'AI-Cover-Lab/' + relative.as_posix())
     parts = []
     with target.open('rb') as stream:
         number = 1
         while True:
-            block = stream.read(part_mib * 1024 * 1024)
+            block = stream.read(min(part_mib * 1024 * 1024, 4 * 1024 * 1024))
             if not block:
                 break
             part = destination / f'{target.name}.part{number:02d}'
             if part.exists():
                 raise FileExistsError(part)
-            part.write_bytes(block)
-            parts.append({'name': part.name, 'bytes': len(block), 'sha256': digest(part)})
+            with part.open('xb') as output:
+                remaining = part_mib * 1024 * 1024
+                while block:
+                    output.write(block)
+                    remaining -= len(block)
+                    if not remaining:
+                        break
+                    block = stream.read(min(remaining, 4 * 1024 * 1024))
+            parts.append({'name': part.name, 'bytes': part.stat().st_size, 'sha256': digest(part)})
             number += 1
     write_json(destination / 'offline-manifest.json', {'version': VERSION, 'archive': target.name,
         'bytes': target.stat().st_size, 'sha256': digest(target),
@@ -175,10 +212,13 @@ if __name__ == '__main__':
     parser.add_argument('--ffmpeg', type=Path)
     parser.add_argument('--sources', type=Path)
     parser.add_argument('--archive-only', action='store_true')
+    parser.add_argument('--local-only', action='store_true', help='Personal relocation test only; cannot create distribution archive')
     args = parser.parse_args()
     if not args.archive_only:
-        if not args.ffmpeg or not args.sources or not any(args.sources.iterdir()):
+        if not args.local_only and (not args.ffmpeg or not args.sources or not any(args.sources.iterdir())):
             parser.error('FFmpeg distribution and corresponding-source folder are required')
-        assemble(args.installation.resolve(), args.output.resolve(), args.git, args.ffmpeg.resolve(), args.sources.resolve())
+        assemble(args.installation.resolve(), args.output.resolve(), args.git,
+                 args.ffmpeg.resolve() if args.ffmpeg else None,
+                 args.sources.resolve() if args.sources else None, args.local_only)
     else:
         archive(args.output.resolve() / 'AI-Cover-Lab', args.output.resolve())

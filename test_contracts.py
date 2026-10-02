@@ -61,6 +61,15 @@ class Contracts(unittest.TestCase):
             training.add_materials(self.project, None, [str(self.source)], None)
         self.assertEqual(len(training.read_project(self.project)['files']), 1)
 
+    def test_bundled_voice_is_for_inference_not_training(self):
+        data = training.read_project(self.project)
+        data.update(inference_only=True, active={'epoch': 25})
+        training.write_json(training.project_path(self.project) / 'profile.json', data)
+        self.assertEqual(training.choices(), [])
+        self.assertEqual(training.choices(approved_only=True), [('测试声线', self.project)])
+        with self.assertRaisesRegex(ValueError, '仅供推理'):
+            training.add_materials(self.project, [str(self.source)], None, None)
+
     def test_approval_requires_validation_and_listening(self):
         data = training.read_project(self.project)
         data['candidates'] = [{'id': 'candidate', 'model': 'model.pth', 'epoch': 1}]

@@ -3,7 +3,12 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'offline-manifest.json') -Raw | ConvertFrom-Json
 function Assert-Hash($Path, $Bytes, $Sha) {
-  if ((Get-Item -LiteralPath $Path).Length -ne $Bytes -or (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Sha) { throw "Checksum failed: $Path" }
+  $Stream = [IO.File]::OpenRead($Path)
+  $Hash = [Security.Cryptography.SHA256]::Create()
+  try {
+    $Actual = ([BitConverter]::ToString($Hash.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant()
+    if ($Stream.Length -ne $Bytes -or $Actual -ne $Sha) { throw "Checksum failed: $Path" }
+  } finally { $Hash.Dispose(); $Stream.Dispose() }
 }
 $Destination = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $Destination) { throw 'Destination already exists. Choose a new empty path with -Destination.' }

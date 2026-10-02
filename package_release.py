@@ -10,7 +10,8 @@ FILES = ['app.py', 'lab_env.py', 'audio_workflow.py', 'worker.py', 'process_runn
          'requirements-engine.txt', 'README.md', 'THIRD_PARTY.md', 'LICENSE', '.gitignore',
          'test_contracts.py', 'package_release.py', 'stop.ps1', 'Stop-Cover.cmd',
          'MODEL_CARD.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'RELEASE_NOTES.md',
-         'build_offline.py', 'install-offline.ps1', 'Install-Offline.cmd']
+         'build_offline.py', 'install-offline.ps1', 'Install-Offline.cmd', 'fetch_release_dependencies.py',
+         'verify_offline.py', 'test_offline_packaging.py']
 
 
 def build():

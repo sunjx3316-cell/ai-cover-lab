@@ -3,6 +3,8 @@
 本地 AI 翻唱：三轨分离、专属声线训练、独立验收试听、声线入库、成品导出。
 目前验证环境为 Windows、Python 3.10、RTX 4060 Laptop 8GB、CUDA PyTorch 2.4。
 
+发布状态：源码已公开，完整离线 Release 仍在准备与验证中，尚未公开下载。
+
 ## 启动与安装
 
 完整离线版本见 [GitHub Releases](https://github.com/sunjx3316-cell/ai-cover-lab/releases)。下载所有分卷及安装脚本，双击 `Install-Offline.cmd` 校验、合并和解压，然后双击解压目录中的 `Start-Cover.cmd`。

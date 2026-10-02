@@ -1,3 +1,4 @@
+param([switch]$NoBrowser)
 $ErrorActionPreference = 'Stop'
 $Lab = $PSScriptRoot
 $Portable = Join-Path $Lab 'runtime\python\python.exe'
@@ -15,7 +16,11 @@ foreach ($Port in 7867..7886) {
   $Url = "http://127.0.0.1:$Port"
   try {
     $Health = Invoke-RestMethod "$Url/lab-health" -TimeoutSec 1
-    if ($Health.application -eq 'AI Cover Lab' -and $Health.root_token -eq $Token) { Start-Process "$Url/"; exit 0 }
+    if ($Health.application -eq 'AI Cover Lab' -and $Health.root_token -eq $Token) {
+      if (-not $NoBrowser) { Start-Process "$Url/" }
+      Write-Host "$Url/"
+      exit 0
+    }
   } catch { }
   $Listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
   try { $Listener.Start(); $Selected = $Port } catch { } finally { $Listener.Stop() }
@@ -29,7 +34,11 @@ for ($i = 0; $i -lt 90; $i++) {
   if ($Process.HasExited) { throw "Startup failed. See $Lab\logs\web.err.log" }
   try {
     $Health = Invoke-RestMethod "$Url/lab-health" -TimeoutSec 1
-    if ($Health.application -eq 'AI Cover Lab' -and $Health.root_token -eq $Token) { Start-Process "$Url/"; exit 0 }
+    if ($Health.application -eq 'AI Cover Lab' -and $Health.root_token -eq $Token) {
+      if (-not $NoBrowser) { Start-Process "$Url/" }
+      Write-Host "$Url/"
+      exit 0
+    }
   } catch { }
 }
 throw "Startup timed out. See $Lab\logs\web.err.log"

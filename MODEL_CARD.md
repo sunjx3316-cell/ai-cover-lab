@@ -5,7 +5,7 @@
 - Included: inference weights and retrieval index only.
 - Quality status: manually saved; full independent acceptance was bypassed.
 - Publisher: https://github.com/sunjx3316-cell
-- Model SHA256: `91bc98037f32c3eeca82dcbf4fb494a616a76fa99d43a3dc4c9a2ed97f5614a1b`.
+- Model SHA256: `91bc98037f32c3eca82dcbf4fb494a616a76fa99d43a3dc4c9a2ed97f5614a1b`.
 
 The publisher explicitly confirmed permission to publicly redistribute this
 trained voice model. This is the publisher's assertion, not independently

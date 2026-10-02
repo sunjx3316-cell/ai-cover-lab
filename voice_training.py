@@ -40,6 +40,8 @@ def choices(approved_only=False):
         data = json.loads(file.read_text(encoding='utf-8-sig'))
         if data.get('demo'):
             continue
+        if data.get('inference_only') and not approved_only:
+            continue
         if not approved_only or data.get('active'):
             result.append((data['name'], data['id']))
     return result
@@ -61,6 +63,8 @@ def create_project(name):
 def add_materials(project_id, train, holdout, probes):
     folder = project_path(project_id)
     data = read_project(project_id)
+    if data.get('inference_only'):
+        raise ValueError('附带声线仅供推理，请创建新声线训练自己的素材')
     added = []
     duplicate = 0
     for split, files in [('train', train), ('holdout', holdout), ('probes', probes)]:
