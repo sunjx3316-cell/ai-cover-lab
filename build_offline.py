@@ -50,6 +50,8 @@ def copy(source, target, link=False):
 
 
 def tree(source, target, link=False, runtime=False, base_python=False, skip=()):
+    if not source.is_dir():
+        raise FileNotFoundError(source)
     for file in sorted(source.rglob('*')):
         relative = file.relative_to(source)
         if any(relative.as_posix() == item or relative.as_posix().startswith(item + '/') for item in skip):
@@ -178,6 +180,12 @@ def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=Fa
     for name in FILES:
         copy(SOURCE / name, payload / name)
     python = installation / 'runtime/python/cpython-3.10-windows-x86_64-none'
+    if not (python / 'python.exe').is_file():
+        candidates = [path for path in (installation / 'runtime/python').glob('cpython-3.10*-windows-x86_64-none')
+                      if (path / 'python.exe').is_file()]
+        if len(candidates) != 1:
+            raise RuntimeError('Expected exactly one usable CPython 3.10 installation')
+        python = candidates[0]
     tree(python, payload / 'runtime/python', link=True, runtime=True, base_python=True)
     site = installation / 'envs/ying/Lib/site-packages'
     replacements = ('soxr', 'soxr-1.1.0.dist-info', '_soundfile_data/libsndfile_64bit.dll',

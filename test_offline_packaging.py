@@ -81,6 +81,12 @@ class SourceAuditGate(unittest.TestCase):
 
 
 class NativeReplacementSafety(unittest.TestCase):
+    def test_missing_runtime_folder_cannot_be_silently_skipped(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaises(FileNotFoundError):
+                tree(root / 'missing', root / 'target')
+
     def test_optional_effects_import_only_when_requested(self):
         source = ('from pedalboard import (\n    Pedalboard,\n)\n'
                   'class Converter:\n    @staticmethod\n    def post_process_audio(audio):\n'
