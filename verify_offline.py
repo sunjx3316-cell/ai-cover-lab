@@ -67,7 +67,7 @@ if __name__ == '__main__':
              '--output', str(separated)], root)
         run([str(python), '-c',
              'from pathlib import Path; import numpy as np,soundfile as sf; '
-             f'files=list(Path({str(separated)!r}).glob("*.wav")); '
+             f'files=list(Path({str(separated)!r}).rglob("*.wav")); '
              'assert len(files)==3,files; '
              'assert all(np.isfinite(sf.read(f)[0]).all() and sf.info(f).duration>3 for f in files); '
              'print("three stems valid",[f.name for f in files])'], root)
