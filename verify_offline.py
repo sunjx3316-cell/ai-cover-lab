@@ -33,12 +33,12 @@ if __name__ == '__main__':
          'import sys, pathlib, torch, faiss, gradio, soundfile; '
          'assert pathlib.Path(sys.prefix).resolve()==pathlib.Path(sys.executable).resolve().parent; '
          'print(sys.executable,torch.__version__,torch.cuda.is_available(),faiss.__version__,gradio.__version__)'], root)
-    run([str(python), '-m', 'unittest', 'test_contracts', 'test_offline_packaging', '-v'], root)
+    run([str(python), '-B', '-m', 'unittest', 'discover', '-v'], root)
     if args.gpu:
         run([str(python), str(root / 'rvc_worker.py'), 'check'], root)
         run([str(python), str(root / 'worker.py'), 'check'], root)
-        fixture = root / 'temp/offline-verification/input.wav'
-        output = fixture.with_name('converted.wav')
+        fixture = root / 'temp/offline-verification/input/synthetic.wav'
+        output = fixture.parent.parent / 'converted.wav'
         fixture.parent.mkdir(parents=True, exist_ok=True)
         run([str(python), '-c',
              'import numpy as np,soundfile as sf; '
@@ -62,4 +62,13 @@ if __name__ == '__main__':
              f'import soundfile as sf,numpy as np; x,sr=sf.read({str(output)!r}); '
              'assert sr==44100 and len(x)>sr*3 and np.isfinite(x).all(); '
              'assert np.sqrt(np.mean(x*x))>1e-5; print("inference audio valid",len(x)/sr)'], root)
+        separated = fixture.parent.parent / 'separated'
+        run([str(python), str(root / 'worker.py'), 'separate', '--input', str(fixture.parent),
+             '--output', str(separated)], root)
+        run([str(python), '-c',
+             'from pathlib import Path; import numpy as np,soundfile as sf; '
+             f'files=list(Path({str(separated)!r}).glob("*.wav")); '
+             'assert len(files)==3,files; '
+             'assert all(np.isfinite(sf.read(f)[0]).all() and sf.info(f).duration>3 for f in files); '
+             'print("three stems valid",[f.name for f in files])'], root)
     print(json.dumps({'offline_checks': 'passed', 'gpu': args.gpu}), flush=True)

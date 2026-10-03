@@ -4,6 +4,9 @@ Only tracked engine source and explicitly selected model assets are copied.
 Immutable runtime files may be hard-linked locally; the ZIP is self-contained.
 """
 import argparse
+import ast
+import base64
+import csv
 import hashlib
 import importlib.metadata
 import json
@@ -46,9 +49,11 @@ def copy(source, target, link=False):
     shutil.copy2(source, target)
 
 
-def tree(source, target, link=False, runtime=False, base_python=False):
+def tree(source, target, link=False, runtime=False, base_python=False, skip=()):
     for file in sorted(source.rglob('*')):
         relative = file.relative_to(source)
+        if any(relative.as_posix() == item or relative.as_posix().startswith(item + '/') for item in skip):
+            continue
         if not file.is_file() or any(part in {'.git', '__pycache__', '.cache'} for part in relative.parts):
             continue
         if file.suffix in {'.pyc', '.pyo'}:
@@ -68,14 +73,35 @@ def write_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
+def optional_effects_source(text):
+    module = ast.parse(text)
+    imports = [node for node in module.body if isinstance(node, ast.ImportFrom) and node.module == 'pedalboard']
+    methods = [node for node in ast.walk(module) if isinstance(node, ast.FunctionDef) and node.name == 'post_process_audio']
+    if len(imports) != 1 or len(methods) != 1:
+        raise RuntimeError('Pinned Applio optional-effects source contract changed')
+    lines = text.splitlines(keepends=True)
+    imported = ''.join(lines[imports[0].lineno - 1:imports[0].end_lineno])
+    insertion = methods[0].body[0].lineno - 1
+    lazy = '        try:\n' + ''.join('            ' + line for line in imported.splitlines(keepends=True))
+    lazy += ('        except ImportError as error:\n'
+             '            raise RuntimeError("Optional Applio effects are not included in this offline build") from error\n')
+    lines[insertion:insertion] = [lazy]
+    del lines[imports[0].lineno - 1:imports[0].end_lineno]
+    result = ''.join(lines)
+    ast.parse(result)
+    return result
+
+
 def validate_corresponding_sources(sources):
     sources = sources.resolve()
     provenance = json.loads((sources / 'SOURCE-MANIFEST.json').read_text(encoding='utf-8-sig'))
     required = {
         'ffmpeg': [('archive', 'sha256'), ('build_recipe_archive', 'build_recipe_sha256'),
-                   ('dependency_cache_archive', 'dependency_cache_expected_sha256')],
+                   ('dependency_cache_archive', 'dependency_cache_expected_sha256'),
+                   ('dependency_notices_archive', 'dependency_notices_sha256')],
         'pedalboard': [('archive', 'sha256')],
-        'soxr': [('archive', 'sha256')],
+        'soxr': [('archive', 'sha256'), ('build_recipe_archive', 'build_recipe_sha256'),
+                 ('binding_source_archive', 'binding_source_sha256')],
         'libsndfile': [('archive', 'sha256'), ('wrapper_source_archive', 'wrapper_source_sha256'),
                       ('dependency_source_archive', 'dependency_source_sha256')],
         'runtime': [('archive', 'sha256')],
@@ -99,9 +125,49 @@ def validate_corresponding_sources(sources):
     return provenance
 
 
-def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=False):
+def install_native_overrides(site, target, sndfile, soxr_wheel, provenance):
+    for component, path, key in [('libsndfile', sndfile, 'binary_sha256'),
+                                  ('soxr', soxr_wheel, 'wheel_sha256')]:
+        expected = provenance[component].get(key)
+        if not path or not expected or digest(path) != expected:
+            raise RuntimeError(f'{component} rebuilt binary checksum mismatch')
+    with zipfile.ZipFile(soxr_wheel) as wheel:
+        for entry in wheel.infolist():
+            path = Path(entry.filename)
+            if (path.is_absolute() or '\\' in entry.orig_filename or ':' in entry.orig_filename or
+                    '..' in path.parts or not path.parts or
+                    path.parts[0] not in {'soxr', 'soxr-1.1.0.dist-info'}):
+                raise RuntimeError('Unsafe or unexpected soxr wheel entry')
+        for entry in wheel.infolist():
+            if entry.is_dir():
+                continue
+            path = target / entry.filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('xb') as output:
+                output.write(wheel.read(entry))
+    copy(sndfile, target / '_soundfile_data/libsndfile_64bit.dll')
+    # RECORD must be fresh too: the original runtime can share hard-linked files.
+    relative = 'soundfile-0.12.1.dist-info/RECORD'
+    with (site / relative).open(newline='', encoding='utf-8') as original:
+        rows = list(csv.reader(original))
+    name = '_soundfile_data/libsndfile_64bit.dll'
+    checksum = base64.urlsafe_b64encode(bytes.fromhex(digest(sndfile))).rstrip(b'=').decode('ascii')
+    found = False
+    for row in rows:
+        if row[0] == name:
+            row[1:] = ['sha256=' + checksum, str(sndfile.stat().st_size)]
+            found = True
+    if not found:
+        raise RuntimeError('SoundFile RECORD does not identify its native library')
+    (target / relative).parent.mkdir(parents=True, exist_ok=True)
+    with (target / relative).open('x', newline='', encoding='utf-8') as record:
+        csv.writer(record).writerows(rows)
+
+
+def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=False,
+             sndfile=None, soxr_wheel=None):
     if not local_only:
-        validate_corresponding_sources(sources)
+        provenance = validate_corresponding_sources(sources)
         license_text = subprocess.check_output([str(ffmpeg / 'bin/ffmpeg.exe'), '-L'], text=True, stderr=subprocess.STDOUT)
         if 'GNU Lesser General Public License' not in license_text:
             raise RuntimeError('Expected an LGPL FFmpeg build')
@@ -114,7 +180,14 @@ def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=Fa
     python = installation / 'runtime/python/cpython-3.10-windows-x86_64-none'
     tree(python, payload / 'runtime/python', link=True, runtime=True, base_python=True)
     site = installation / 'envs/ying/Lib/site-packages'
-    tree(site, payload / 'runtime/python/Lib/site-packages', link=True, runtime=True)
+    replacements = ('soxr', 'soxr-1.1.0.dist-info', '_soundfile_data/libsndfile_64bit.dll',
+                    'pedalboard', 'pedalboard_native', 'pedalboard-0.9.17.dist-info',
+                    'pedalboard_native.cp310-win_amd64.pyd',
+                    'soundfile-0.12.1.dist-info/RECORD') if not local_only else ()
+    target_site = payload / 'runtime/python/Lib/site-packages'
+    tree(site, target_site, link=True, runtime=True, skip=replacements)
+    if not local_only:
+        install_native_overrides(site, target_site, sndfile, soxr_wheel, provenance)
     # Engine files are immutable here; copy only git-tracked, non-audio files.
     for name, revision in REVISIONS.items():
         repo = installation / 'external' / name
@@ -126,7 +199,12 @@ def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=Fa
             path = Path(relative)
             if path.suffix.lower() in AUDIO | {'.pyc', '.pyo'} or '__pycache__' in path.parts:
                 continue
-            copy(repo / path, payload / 'external' / name / path)
+            target = payload / 'external' / name / path
+            if not local_only and name == 'Applio' and path.as_posix() == 'rvc/infer/infer.py':
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(optional_effects_source((repo / path).read_text(encoding='utf-8')), encoding='utf-8')
+            else:
+                copy(repo / path, target)
     assets = ['rvc/models/embedders/contentvec/config.json',
               'rvc/models/embedders/contentvec/pytorch_model.bin',
               'rvc/models/predictors/rmvpe.pt',
@@ -144,6 +222,8 @@ def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=Fa
         copy(saved / original, payload / 'training' / VOICE / 'saved' / name, True)
     if digest(payload / 'training' / VOICE / 'saved/voice-25.pth') != '91bc98037f32c3eca82dcbf4fb494a616a76fa99d43a3dc4c9a2ed97f5614a1b':
         raise RuntimeError('Bundled voice checksum mismatch')
+    if digest(payload / 'training' / VOICE / 'saved/voice.index') != 'ac430a8b4c9653f91be510558c75c071a72551e3b96419090f61be08c279065c':
+        raise RuntimeError('Bundled voice index checksum mismatch')
     write_json(payload / 'training' / VOICE / 'profile.json', {
         'id': VOICE, 'name': '凑企鹅', 'files': [], 'candidates': [], 'last_epoch': 25,
         'inference_only': True,
@@ -166,10 +246,11 @@ def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=Fa
         {'name': dist.metadata.get('Name'), 'version': dist.version,
          'license': dist.metadata.get('License-Expression') or dist.metadata.get('License', '')[:200],
          'license_files': list(dist.metadata.get_all('License-File') or [])}
-        for dist in importlib.metadata.distributions(path=[str(site)])], key=lambda item: (item['name'] or '').lower()))
+        for dist in importlib.metadata.distributions(path=[str(target_site)])], key=lambda item: (item['name'] or '').lower()))
     write_json(payload / 'BUILD.json', {'version': VERSION, 'upstream_revisions': REVISIONS,
                                       'platform': 'Windows-x86_64', 'torch': '2.4.0+cu124',
                                       'voice_epoch': 25, 'includes_raw_audio': False,
+                                      'optional_applio_effects': 'not bundled; lazy import patch' if not local_only else 'upstream',
                                       'redistribution_ready': not local_only})
     files = list(payload.rglob('*'))
     media = [str(file.relative_to(payload)) for file in files if file.is_file() and file.suffix.lower() in AUDIO]
@@ -190,7 +271,7 @@ def archive(payload, destination, part_mib=900):
     if target.exists():
         raise FileExistsError(target)
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as package:
-        for file in sorted(payload.rglob('*')):
+        for number, file in enumerate(sorted(payload.rglob('*'))):
             relative = file.relative_to(payload)
             if not file.is_file() or '__pycache__' in relative.parts or file.suffix in {'.pyc', '.pyo'}:
                 continue
@@ -201,6 +282,13 @@ def archive(payload, destination, part_mib=900):
             if relative.parts[0] == 'voices' or (relative.parts[0] == 'training' and relative.as_posix() not in allowed_training):
                 raise RuntimeError(f'Unexpected private data in release: {relative}')
             package.write(file, 'AI-Cover-Lab/' + relative.as_posix())
+            if number % 2000 == 0:
+                print(f'Packing: {relative}', flush=True)
+    print('Verifying public archive ZIP CRC...', flush=True)
+    with zipfile.ZipFile(target) as package:
+        failed = package.testzip()
+        if failed:
+            raise RuntimeError(f'Public archive CRC mismatch: {failed}')
     parts = []
     with target.open('rb') as stream:
         number = 1
@@ -236,14 +324,19 @@ if __name__ == '__main__':
     parser.add_argument('--git', default='git')
     parser.add_argument('--ffmpeg', type=Path)
     parser.add_argument('--sources', type=Path)
+    parser.add_argument('--sndfile', type=Path, help='Audited rebuilt shared libsndfile DLL')
+    parser.add_argument('--soxr-wheel', type=Path, help='Audited rebuilt soxr wheel')
     parser.add_argument('--archive-only', action='store_true')
     parser.add_argument('--local-only', action='store_true', help='Personal relocation test only; cannot create distribution archive')
     args = parser.parse_args()
     if not args.archive_only:
-        if not args.local_only and (not args.ffmpeg or not args.sources or not any(args.sources.iterdir())):
-            parser.error('FFmpeg distribution and corresponding-source folder are required')
+        if not args.local_only and (not args.ffmpeg or not args.sources or not any(args.sources.iterdir()) or
+                                   not args.sndfile or not args.soxr_wheel):
+            parser.error('Audited FFmpeg, corresponding sources, libsndfile and soxr wheel are required')
         assemble(args.installation.resolve(), args.output.resolve(), args.git,
                  args.ffmpeg.resolve() if args.ffmpeg else None,
-                 args.sources.resolve() if args.sources else None, args.local_only)
+                 args.sources.resolve() if args.sources else None, args.local_only,
+                 args.sndfile.resolve() if args.sndfile else None,
+                 args.soxr_wheel.resolve() if args.soxr_wheel else None)
     else:
         archive(args.output.resolve() / 'AI-Cover-Lab', args.output.resolve())

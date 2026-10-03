@@ -1,13 +1,15 @@
 import hashlib
+import ast
 import json
 import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
-from build_offline import archive, validate_corresponding_sources
+from build_offline import archive, install_native_overrides, optional_effects_source, tree, validate_corresponding_sources
 
 
 class SourceAuditGate(unittest.TestCase):
@@ -19,11 +21,15 @@ class SourceAuditGate(unittest.TestCase):
         manifest = {name: dict(entry) for name in ['ffmpeg', 'pedalboard', 'soxr', 'libsndfile', 'runtime']}
         manifest['ffmpeg'].update(build_recipe_archive=source.name, build_recipe_sha256=entry['sha256'],
                                   dependency_cache_archive=source.name,
-                                  dependency_cache_expected_sha256=entry['sha256'])
+                                  dependency_cache_expected_sha256=entry['sha256'],
+                                  dependency_notices_archive=source.name,
+                                  dependency_notices_sha256=entry['sha256'])
         manifest['libsndfile'].update(wrapper_source_archive=source.name,
                                      wrapper_source_sha256=entry['sha256'],
                                      dependency_source_archive=source.name,
                                      dependency_source_sha256=entry['sha256'])
+        manifest['soxr'].update(build_recipe_archive=source.name, build_recipe_sha256=entry['sha256'],
+                                binding_source_archive=source.name, binding_source_sha256=entry['sha256'])
         return manifest
 
     def write(self, root, manifest):
@@ -72,6 +78,66 @@ class SourceAuditGate(unittest.TestCase):
             self.write(root, manifest)
             with self.assertRaisesRegex(RuntimeError, 'escapes the source folder'):
                 validate_corresponding_sources(root)
+
+
+class NativeReplacementSafety(unittest.TestCase):
+    def test_optional_effects_import_only_when_requested(self):
+        source = ('from pedalboard import (\n    Pedalboard,\n)\n'
+                  'class Converter:\n    @staticmethod\n    def post_process_audio(audio):\n'
+                  '        return Pedalboard()(audio)\n')
+        patched = optional_effects_source(source)
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) for node in ast.parse(patched).body))
+        scope = {}
+        exec(patched, scope)
+        with mock.patch.dict('sys.modules', {'pedalboard': None}):
+            with self.assertRaisesRegex(RuntimeError, 'not included'):
+                scope['Converter'].post_process_audio([])
+
+    def fixture(self, root, entry='soxr/test.py'):
+        site, target = root / 'original', root / 'target'
+        record = site / 'soundfile-0.12.1.dist-info/RECORD'
+        record.parent.mkdir(parents=True)
+        record.write_text('_soundfile_data/libsndfile_64bit.dll,sha256=old,3\n')
+        dll = site / '_soundfile_data/libsndfile_64bit.dll'
+        dll.parent.mkdir(parents=True)
+        dll.write_bytes(b'old')
+        tree(site, target, link=True, skip=('_soundfile_data/libsndfile_64bit.dll',
+                                          'soundfile-0.12.1.dist-info/RECORD'))
+        new = root / 'new.dll'
+        new.write_bytes(b'rebuilt')
+        wheel = root / 'soxr.whl'
+        with zipfile.ZipFile(wheel, 'w') as stream:
+            info = zipfile.ZipInfo()
+            info.filename = entry
+            stream.writestr(info, b'test')
+        manifest = {'libsndfile': {'binary_sha256': hashlib.sha256(new.read_bytes()).hexdigest()},
+                    'soxr': {'wheel_sha256': hashlib.sha256(wheel.read_bytes()).hexdigest()}}
+        return site, target, new, wheel, manifest
+
+    def test_replacements_never_modify_original_library_or_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.fixture(Path(temporary))
+            install_native_overrides(*args)
+            site, target = args[:2]
+            self.assertEqual((site / '_soundfile_data/libsndfile_64bit.dll').read_bytes(), b'old')
+            self.assertIn('sha256=old', (site / 'soundfile-0.12.1.dist-info/RECORD').read_text())
+            self.assertEqual((target / '_soundfile_data/libsndfile_64bit.dll').read_bytes(), b'rebuilt')
+            self.assertNotIn('sha256=old', (target / 'soundfile-0.12.1.dist-info/RECORD').read_text())
+
+    def test_unverified_binary_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.fixture(Path(temporary))
+            args[-1]['libsndfile']['binary_sha256'] = '0' * 64
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                install_native_overrides(*args)
+
+    def test_unsafe_wheel_rejected_before_extraction(self):
+        for entry in ['soxr/../../outside.py', '/soxr/test.py', 'other/test.py', 'soxr\\test.py']:
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temporary:
+                args = self.fixture(Path(temporary), entry)
+                with self.assertRaisesRegex(RuntimeError, 'Unsafe'):
+                    install_native_overrides(*args)
+                self.assertFalse((args[1] / '_soundfile_data/libsndfile_64bit.dll').exists())
 
 
 class ArchiveSafety(unittest.TestCase):

@@ -1,6 +1,7 @@
 import tempfile
 import json
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 
 import exports
 import voice_training as training
-from audio_workflow import decode
+from audio_workflow import decode, validate, FFMPEG
 from train_rvc import adapt_source
 from voice_selection import resolve_source
 
@@ -39,6 +40,33 @@ class Contracts(unittest.TestCase):
         for invalid in ('../outside', '', 'a' * 13, 'Z' * 12):
             with self.assertRaises(ValueError):
                 training.project_path(invalid)
+
+    def test_validation_falls_back_for_compressed_audio(self):
+        compressed = self.root / 'audio.mp3'
+        subprocess.run([str(FFMPEG), '-hide_banner', '-loglevel', 'error', '-y',
+                        '-i', str(self.source), str(compressed)], check=True, capture_output=True)
+        original_read = sf.read
+
+        def wave_only(path, **options):
+            if Path(path).suffix == '.mp3':
+                raise sf.LibsndfileError(1, 'codec unavailable')
+            return original_read(path, **options)
+
+        before = compressed.read_bytes()
+        with patch.object(sf, 'read', side_effect=wave_only):
+            stats = validate(compressed)
+        self.assertEqual(stats['sr'], 16000)
+        self.assertGreater(stats['rms'], 0.01)
+        self.assertGreater(stats['seconds'], 3.9)
+        self.assertEqual(compressed.read_bytes(), before)
+
+    def test_invalid_compressed_audio_fails_without_temp_leak(self):
+        bad = self.root / 'bad.mp3'
+        bad.write_bytes(b'not audio')
+        with patch('audio_workflow.tempfile.tempdir', str(self.root)):
+            with self.assertRaisesRegex(RuntimeError, 'Invalid audio: bad.mp3'):
+                validate(bad)
+        self.assertEqual(list(self.root.glob('audio-validation-*')), [])
 
     def test_portable_model_paths_and_traversal(self):
         folder = training.project_path(self.project)

@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -33,7 +34,19 @@ def decode(source, target, start=0, duration=0, mono=False, sample_rate=44100, c
     validate(target)
 
 def validate(path):
-    wave, sr = sf.read(path, always_2d=True)
+    try:
+        wave, sr = sf.read(path, always_2d=True)
+    except sf.LibsndfileError:
+        # Compressed formats are decoded by the audited FFmpeg build, not libsndfile codecs.
+        with tempfile.TemporaryDirectory(prefix='audio-validation-') as temporary:
+            decoded = Path(temporary) / 'decoded.wav'
+            options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+            result = subprocess.run([str(FFMPEG), '-hide_banner', '-loglevel', 'error', '-y',
+                                     '-i', str(path), '-vn', '-c:a', 'pcm_f32le', str(decoded)],
+                                    capture_output=True, **options)
+            if result.returncode:
+                raise RuntimeError(f'Invalid audio: {Path(path).name}') from None
+            wave, sr = sf.read(decoded, always_2d=True)
     if len(wave) < sr / 2 or not np.isfinite(wave).all():
         raise RuntimeError(f'Invalid audio: {path}')
     peak = float(np.max(np.abs(wave)))

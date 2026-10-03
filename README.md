@@ -3,7 +3,7 @@
 本地 AI 翻唱：三轨分离、专属声线训练、独立验收试听、声线入库、成品导出。
 目前验证环境为 Windows、Python 3.10、RTX 4060 Laptop 8GB、CUDA PyTorch 2.4。
 
-发布状态：源码已公开，完整离线 Release 仍在准备与验证中，尚未公开下载。
+即用版本请从 GitHub Releases 下载离线分卷与安装脚本；源码 ZIP 不是运行包。
 
 ## 启动与安装
 

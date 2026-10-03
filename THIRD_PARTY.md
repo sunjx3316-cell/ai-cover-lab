@@ -21,6 +21,23 @@ license files intact.
   Its notices and corresponding source must accompany binary redistribution.
   MIT application source may be reused under MIT, but that does not remove GPL
   obligations from a combined runtime. Do not describe the complete bundle as MIT.
+  This public offline build excludes its binaries: Applio's optional effects
+  import is moved into its effects method by a recorded build-time patch.
+  AI Cover Lab never requests those optional effects. The upstream source
+  archive is retained for provenance, not loaded as a runtime plugin.
+- SoundFile 0.12.1: BSD wrapper; libsndfile 1.2.0 is LGPL-2.1-or-later.
+  The public DLL is rebuilt shared, with external and MPEG codecs disabled.
+  FFmpeg handles compressed inputs/exports. Exact source and build recipe are
+  included; users may replace/rebuild the shared library.
+- soxr 1.1.0: LGPL-2.1-or-later Python wrapper/native library, BSD PFFFT/nanobind.
+  The offline wheel is rebuilt from the included source, with the exact
+  nanobind source and rebuild recipe supplied alongside it.
+- NVIDIA CUDA 12.4 and cuDNN 9.1 runtime DLLs are proprietary redistributable
+  components, not relicensed under MIT. Only the application's runtime DLLs
+  are included, not a standalone SDK or driver. Their original EULAs and
+  notices are included in LICENSES/corresponding-source/runtime-notices.zip.
+  Use of NVIDIA components remains subject to those terms and NVIDIA GPU
+  restrictions. No NVIDIA sponsorship or endorsement is claimed.
 - CPython: PSF license; runtime LICENSE.txt is preserved.
 - Installed Python package metadata and license files are retained in
   runtime/python/Lib/site-packages. DEPENDENCIES.json records installed versions.
