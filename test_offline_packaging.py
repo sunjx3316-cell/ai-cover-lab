@@ -7,7 +7,71 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from build_offline import archive
+from build_offline import archive, validate_corresponding_sources
+
+
+class SourceAuditGate(unittest.TestCase):
+    def fixture(self, root):
+        source = root / 'source.txt'
+        source.write_bytes(b'test source')
+        entry = {'status': 'complete', 'archive': source.name,
+                 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
+        manifest = {name: dict(entry) for name in ['ffmpeg', 'pedalboard', 'soxr', 'libsndfile', 'runtime']}
+        manifest['ffmpeg'].update(build_recipe_archive=source.name, build_recipe_sha256=entry['sha256'],
+                                  dependency_cache_archive=source.name,
+                                  dependency_cache_expected_sha256=entry['sha256'])
+        manifest['libsndfile'].update(wrapper_source_archive=source.name,
+                                     wrapper_source_sha256=entry['sha256'],
+                                     dependency_source_archive=source.name,
+                                     dependency_source_sha256=entry['sha256'])
+        return manifest
+
+    def write(self, root, manifest):
+        (root / 'SOURCE-MANIFEST.json').write_text(json.dumps(manifest), encoding='utf-8-sig')
+
+    def test_all_source_checks_accept_bom_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.fixture(root)
+            self.write(root, manifest)
+            self.assertEqual(validate_corresponding_sources(root), manifest)
+
+    def test_native_and_runtime_audits_fail_closed(self):
+        for component in ['ffmpeg', 'pedalboard', 'soxr', 'libsndfile', 'runtime']:
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                manifest = self.fixture(root)
+                manifest[component]['status'] = 'pending'
+                self.write(root, manifest)
+                with self.assertRaisesRegex(RuntimeError, 'audit is incomplete'):
+                    validate_corresponding_sources(root)
+
+    def test_missing_dependency_declaration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.fixture(root)
+            del manifest['ffmpeg']['dependency_cache_archive']
+            self.write(root, manifest)
+            with self.assertRaisesRegex(RuntimeError, 'declaration is incomplete'):
+                validate_corresponding_sources(root)
+
+    def test_corrupt_dependency_archive_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.fixture(root)
+            manifest['libsndfile']['dependency_source_sha256'] = '0' * 64
+            self.write(root, manifest)
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                validate_corresponding_sources(root)
+
+    def test_source_path_traversal_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.fixture(root)
+            manifest['runtime']['archive'] = '../outside.zip'
+            self.write(root, manifest)
+            with self.assertRaisesRegex(RuntimeError, 'escapes the source folder'):
+                validate_corresponding_sources(root)
 
 
 class ArchiveSafety(unittest.TestCase):

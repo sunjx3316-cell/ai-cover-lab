@@ -68,15 +68,40 @@ def write_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
+def validate_corresponding_sources(sources):
+    sources = sources.resolve()
+    provenance = json.loads((sources / 'SOURCE-MANIFEST.json').read_text(encoding='utf-8-sig'))
+    required = {
+        'ffmpeg': [('archive', 'sha256'), ('build_recipe_archive', 'build_recipe_sha256'),
+                   ('dependency_cache_archive', 'dependency_cache_expected_sha256')],
+        'pedalboard': [('archive', 'sha256')],
+        'soxr': [('archive', 'sha256')],
+        'libsndfile': [('archive', 'sha256'), ('wrapper_source_archive', 'wrapper_source_sha256'),
+                      ('dependency_source_archive', 'dependency_source_sha256')],
+        'runtime': [('archive', 'sha256')],
+    }
+    for component, archives in required.items():
+        entry = provenance.get(component, {})
+        # The original pedalboard manifest predates explicit review statuses.
+        if component != 'pedalboard' and entry.get('status') != 'complete':
+            raise RuntimeError(f'{component} corresponding-source audit is incomplete')
+        if component == 'pedalboard' and entry.get('status', 'complete') != 'complete':
+            raise RuntimeError('pedalboard corresponding-source audit is incomplete')
+        for name_key, hash_key in archives:
+            name, expected = entry.get(name_key), entry.get(hash_key)
+            if not isinstance(name, str) or not name or not isinstance(expected, str) or len(expected) != 64:
+                raise RuntimeError(f'{component} source archive declaration is incomplete')
+            path = (sources / name).resolve()
+            if not path.is_relative_to(sources):
+                raise RuntimeError(f'{component} source archive escapes the source folder')
+            if not path.is_file() or digest(path) != expected:
+                raise RuntimeError(f'{component} source archive checksum mismatch')
+    return provenance
+
+
 def assemble(installation, output, git, ffmpeg=None, sources=None, local_only=False):
     if not local_only:
-        provenance = json.loads((sources / 'SOURCE-MANIFEST.json').read_text(encoding='utf-8'))
-        if provenance.get('ffmpeg', {}).get('status') != 'complete':
-            raise RuntimeError('FFmpeg corresponding-source audit is incomplete')
-        for component in ['ffmpeg', 'pedalboard']:
-            entry = provenance[component]
-            if digest(sources / entry['archive']) != entry['sha256']:
-                raise RuntimeError(f'{component} source archive checksum mismatch')
+        validate_corresponding_sources(sources)
         license_text = subprocess.check_output([str(ffmpeg / 'bin/ffmpeg.exe'), '-L'], text=True, stderr=subprocess.STDOUT)
         if 'GNU Lesser General Public License' not in license_text:
             raise RuntimeError('Expected an LGPL FFmpeg build')
